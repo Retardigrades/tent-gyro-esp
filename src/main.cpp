@@ -142,6 +142,7 @@ typedef union {
 #ifdef UDP_SEND_COMPRESSED
 
 typedef struct {
+		uint16_t time;
 		uint16_t quat_w;
 		uint16_t quat_x;
 		uint16_t quat_y;
@@ -485,27 +486,30 @@ void loop() {
       #endif
 
       #ifdef UDP_SEND_COMPRESSED
-	compressedPacket.data[compressedPosition].quat_w = fifoBuffer.data.quat_w;
-	compressedPacket.data[compressedPosition].quat_x = fifoBuffer.data.quat_x;
-	compressedPacket.data[compressedPosition].quat_y = fifoBuffer.data.quat_y;
-	compressedPacket.data[compressedPosition].quat_z = fifoBuffer.data.quat_z;
-	compressedPacket.data[compressedPosition].gyro_x = fifoBuffer.data.gyro_x;
-	compressedPacket.data[compressedPosition].gyro_y = fifoBuffer.data.gyro_y;
-	compressedPacket.data[compressedPosition].gyro_z = fifoBuffer.data.gyro_z;
-	compressedPacket.data[compressedPosition].acc_x = fifoBuffer.data.acc_x;
-	compressedPacket.data[compressedPosition].acc_y = fifoBuffer.data.acc_y;
-	compressedPacket.data[compressedPosition].acc_z = fifoBuffer.data.acc_z;
-	compressedPacket.data[compressedPosition].cnt = compressedPacketCount++;
+	  uint16_t currentTime = millis();
 
-	++compressedPosition;
+          compressedPacket.data[compressedPosition].time = currentTime;
+          compressedPacket.data[compressedPosition].quat_w = fifoBuffer.data.quat_w;
+          compressedPacket.data[compressedPosition].quat_x = fifoBuffer.data.quat_x;
+          compressedPacket.data[compressedPosition].quat_y = fifoBuffer.data.quat_y;
+          compressedPacket.data[compressedPosition].quat_z = fifoBuffer.data.quat_z;
+          compressedPacket.data[compressedPosition].gyro_x = fifoBuffer.data.gyro_x;
+          compressedPacket.data[compressedPosition].gyro_y = fifoBuffer.data.gyro_y;
+          compressedPacket.data[compressedPosition].gyro_z = fifoBuffer.data.gyro_z;
+          compressedPacket.data[compressedPosition].acc_x = fifoBuffer.data.acc_x;
+          compressedPacket.data[compressedPosition].acc_y = fifoBuffer.data.acc_y;
+          compressedPacket.data[compressedPosition].acc_z = fifoBuffer.data.acc_z;
+          compressedPacket.data[compressedPosition].cnt = compressedPacketCount++;
 
-	if (compressedPosition == DATA_PER_PACKET || millis() > (compressedSend + SEND_RATE)) {
-		udpSender.beginPacket(CONTROLLER, SEND_PORT);
-		udpSender.write(compressedPacket.buff, sizeof(udp_data_t) * compressedPosition);
-		udpSender.endPacket();
-		compressedPosition = 0;
-		compressedSend = millis();
-	}
+          ++compressedPosition;
+
+          if (compressedPosition == DATA_PER_PACKET || currentTime > (compressedSend + SEND_RATE)) {
+            udpSender.beginPacket(CONTROLLER, SEND_PORT);
+            udpSender.write(compressedPacket.buff, sizeof(udp_data_t) * compressedPosition);
+            udpSender.endPacket();
+            compressedPosition = 0;
+            compressedSend = currentTime;
+          }
       #endif
   }
 }
