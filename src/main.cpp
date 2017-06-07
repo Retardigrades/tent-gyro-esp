@@ -361,6 +361,8 @@ void loop() {
       // .
       // .
       // .
+      // Delay for a least one millisecond here to give the WiFi stuff time to act
+      delay(1);
   }
 
   // reset interrupt flag and get INT_STATUS byte
