@@ -105,7 +105,10 @@ void netSetup() {
 // uncomment "OUTPUT_TEAPOT" if you want output that matches the
 // format used for the InvenSense teapot demo
 //#define OUTPUT_TEAPOT
-#define OUTPUT_TEAPOT_UDP
+//#define OUTPUT_TEAPOT_UDP
+#define UDP_SEND_COMPRESSED
+
+
 
 #define INTERRUPT_PIN 12  // use pin 2 on Arduino Uno & most boards
 
@@ -134,6 +137,39 @@ typedef union {
 	} data;
 	uint8_t buff[64];
 } fifo_t;
+
+
+#ifdef UDP_SEND_COMPRESSED
+
+typedef struct {
+		uint16_t quat_w;
+		uint16_t quat_x;
+		uint16_t quat_y;
+		uint16_t quat_z;
+		uint16_t gyro_x;
+		uint16_t gyro_y;
+		uint16_t gyro_z;
+		uint16_t acc_x;
+		uint16_t acc_y;
+		uint16_t acc_z;
+		uint16_t cnt;
+} udp_data_t;
+
+#define DATA_PER_PACKET 800 / sizeof(udp_data_t)
+#define SEND_RATE 1000 / 30
+
+
+typedef union {
+	udp_data_t data[DATA_PER_PACKET];
+	uint8_t buff[DATA_PER_PACKET * sizeof(udp_data_t)];
+} udp_packet_t;
+
+udp_packet_t compressedPacket;
+uint16_t compressedPosition = 0;
+uint16_t compressedSend = 0;
+uint16_t compressedPacketCount = 0;
+
+#endif
 
 // MPU control/status vars
 bool dmpReady = false;  // set true if DMP init was successful
@@ -178,6 +214,7 @@ teapot_t teapotPacket = { .buff = {'$', 0x02, 0, 0,    0,    0,    0,
 #define NUM_PACKETS 10
 uint8_t packet_pos = 0;
 uint8_t udpPackets[14 * NUM_PACKETS];
+
 
 // ================================================================
 // ===               INTERRUPT DETECTION ROUTINE                ===
@@ -445,6 +482,30 @@ void loop() {
           }
 
           teapotPacket.components.cnt++; // packetCount, loops at 0xFF on purpose
+      #endif
+
+      #ifdef UDP_SEND_COMPRESSED
+	compressedPacket.data[compressedPosition].quat_w = fifoBuffer.data.quat_w;
+	compressedPacket.data[compressedPosition].quat_x = fifoBuffer.data.quat_x;
+	compressedPacket.data[compressedPosition].quat_y = fifoBuffer.data.quat_y;
+	compressedPacket.data[compressedPosition].quat_z = fifoBuffer.data.quat_z;
+	compressedPacket.data[compressedPosition].gyro_x = fifoBuffer.data.gyro_x;
+	compressedPacket.data[compressedPosition].gyro_y = fifoBuffer.data.gyro_y;
+	compressedPacket.data[compressedPosition].gyro_z = fifoBuffer.data.gyro_z;
+	compressedPacket.data[compressedPosition].acc_x = fifoBuffer.data.acc_x;
+	compressedPacket.data[compressedPosition].acc_y = fifoBuffer.data.acc_y;
+	compressedPacket.data[compressedPosition].acc_z = fifoBuffer.data.acc_z;
+	compressedPacket.data[compressedPosition].cnt = compressedPacketCount++;
+
+	++compressedPosition;
+
+	if (compressedPosition == DATA_PER_PACKET || millis() > (compressedSend + SEND_RATE)) {
+		udpSender.beginPacket(CONTROLLER, SEND_PORT);
+		udpSender.write(compressedPacket.buff, sizeof(udp_data_t) * compressedPosition);
+		udpSender.endPacket();
+		compressedPosition = 0;
+		compressedSend = millis();
+	}
       #endif
   }
 }
