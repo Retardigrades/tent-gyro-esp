@@ -109,6 +109,32 @@ void netSetup() {
 
 #define INTERRUPT_PIN 12  // use pin 2 on Arduino Uno & most boards
 
+typedef union {
+	struct {
+		uint16_t quat_w;
+		uint8_t _1[2];
+		uint16_t quat_x;
+		uint8_t _2[2];
+		uint16_t quat_y;
+		uint8_t _3[2];
+		uint16_t quat_z;
+		uint8_t _4[2];
+		uint16_t gyro_x;
+		uint8_t _5[2];
+		uint16_t gyro_y;
+		uint8_t _6[2];
+		uint16_t gyro_z;
+		uint8_t _7[2];
+		uint16_t acc_x;
+		uint8_t _8[2];
+		uint16_t acc_y;
+		uint8_t _9[2];
+		uint16_t acc_z;
+		uint8_t _10[64 - 38];
+	} data;
+	uint8_t buff[64];
+} fifo_t;
+
 // MPU control/status vars
 bool dmpReady = false;  // set true if DMP init was successful
 uint8_t mpuIntStatus;   // holds actual interrupt status byte from MPU
@@ -116,7 +142,7 @@ uint8_t devStatus;    // return status after each device operation (0 = success,
                       // !0 = error)
 uint16_t packetSize;  // expected DMP packet size (default is 42 bytes)
 uint16_t fifoCount;   // count of all bytes currently in FIFO
-uint8_t fifoBuffer[64];  // FIFO storage buffer
+fifo_t fifoBuffer;  // FIFO storage buffer
 
 // orientation/motion vars
 Quaternion q;    // [w, x, y, z]         quaternion container
@@ -130,9 +156,24 @@ float euler[3];       // [psi, theta, phi]    Euler angle container
 float
     ypr[3];  // [yaw, pitch, roll]   yaw/pitch/roll container and gravity vector
 
+
+
 // packet structure for InvenSense teapot demo
-uint8_t teapotPacket[14] = {'$', 0x02, 0, 0,    0,    0,    0,
-                            0,   0,    0, 0x00, 0x00, '\r', '\n'};
+typedef union {
+	struct {
+		char preamble[2];
+		uint16_t w;
+		uint16_t x;
+		uint16_t y;
+		uint16_t z;
+		uint8_t _;
+		uint8_t cnt;
+	} components;
+	uint8_t buff[14];
+} teapot_t;
+
+teapot_t teapotPacket = { .buff = {'$', 0x02, 0, 0,    0,    0,    0,
+                            0,   0,    0, 0x00, 0x00, '\r', '\n'} };
 
 #define NUM_PACKETS 10
 uint8_t packet_pos = 0;
@@ -303,7 +344,7 @@ void loop() {
       while (fifoCount < packetSize) fifoCount = mpu.getFIFOCount();
 
       // read a packet from FIFO
-      mpu.getFIFOBytes(fifoBuffer, packetSize);
+      mpu.getFIFOBytes(fifoBuffer.buff, packetSize);
 
       // track FIFO count here in case there is > 1 packet available
       // (this lets us immediately read more without waiting for an interrupt)
@@ -311,7 +352,7 @@ void loop() {
 
       #ifdef OUTPUT_READABLE_QUATERNION
           // display quaternion values in easy matrix form: w x y z
-          mpu.dmpGetQuaternion(&q, fifoBuffer);
+          mpu.dmpGetQuaternion(&q, fifoBuffer.buff);
           Serial.print("quat\t");
           Serial.print(q.w);
           Serial.print("\t");
@@ -324,7 +365,7 @@ void loop() {
 
       #ifdef OUTPUT_READABLE_EULER
           // display Euler angles in degrees
-          mpu.dmpGetQuaternion(&q, fifoBuffer);
+          mpu.dmpGetQuaternion(&q, fifoBuffer.buff);
           mpu.dmpGetEuler(euler, &q);
           Serial.print("euler\t");
           Serial.print(euler[0] * 180/M_PI);
@@ -336,7 +377,7 @@ void loop() {
 
       #ifdef OUTPUT_READABLE_YAWPITCHROLL
           // display Euler angles in degrees
-          mpu.dmpGetQuaternion(&q, fifoBuffer);
+          mpu.dmpGetQuaternion(&q, fifoBuffer.buff);
           mpu.dmpGetGravity(&gravity, &q);
           mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
           Serial.print("ypr\t");
@@ -349,8 +390,8 @@ void loop() {
 
       #ifdef OUTPUT_READABLE_REALACCEL
           // display real acceleration, adjusted to remove gravity
-          mpu.dmpGetQuaternion(&q, fifoBuffer);
-          mpu.dmpGetAccel(&aa, fifoBuffer);
+          mpu.dmpGetQuaternion(&q, fifoBuffer.buff);
+          mpu.dmpGetAccel(&aa, fifoBuffer.buff);
           mpu.dmpGetGravity(&gravity, &q);
           mpu.dmpGetLinearAccel(&aaReal, &aa, &gravity);
           Serial.print("areal\t");
@@ -364,8 +405,8 @@ void loop() {
       #ifdef OUTPUT_READABLE_WORLDACCEL
           // display initial world-frame acceleration, adjusted to remove gravity
           // and rotated based on known orientation from quaternion
-          mpu.dmpGetQuaternion(&q, fifoBuffer);
-          mpu.dmpGetAccel(&aa, fifoBuffer);
+          mpu.dmpGetQuaternion(&q, fifoBuffer.buff);
+          mpu.dmpGetAccel(&aa, fifoBuffer.buff);
           mpu.dmpGetGravity(&gravity, &q);
           mpu.dmpGetLinearAccel(&aaReal, &aa, &gravity);
           mpu.dmpGetLinearAccelInWorld(&aaWorld, &aaReal, &q);
@@ -379,39 +420,31 @@ void loop() {
 
       #ifdef OUTPUT_TEAPOT
           // display quaternion values in InvenSense Teapot demo format:
-          teapotPacket[2] = fifoBuffer[0];
-          teapotPacket[3] = fifoBuffer[1];
-          teapotPacket[4] = fifoBuffer[4];
-          teapotPacket[5] = fifoBuffer[5];
-          teapotPacket[6] = fifoBuffer[8];
-          teapotPacket[7] = fifoBuffer[9];
-          teapotPacket[8] = fifoBuffer[12];
-          teapotPacket[9] = fifoBuffer[13];
-          Serial.write(teapotPacket, 14);
-          teapotPacket[11]++; // packetCount, loops at 0xFF on purpose
+	  teapotPacket.components.w = fifoBuffer.data.quat_w;
+	  teapotPacket.components.x = fifoBuffer.data.quat_x;
+	  teapotPacket.components.y = fifoBuffer.data.quat_y;
+	  teapotPacket.components.z = fifoBuffer.data.quat_z;
+          Serial.write(teapotPacket.buff, 14);
+          teapotPacket.components.cnt++; // packetCount, loops at 0xFF on purpose
       #endif
 
       #ifdef OUTPUT_TEAPOT_UDP
       // display quaternion values in InvenSense Teapot demo format:
-        teapotPacket[2] = fifoBuffer[0];
-        teapotPacket[3] = fifoBuffer[1];
-        teapotPacket[4] = fifoBuffer[4];
-        teapotPacket[5] = fifoBuffer[5];
-        teapotPacket[6] = fifoBuffer[8];
-        teapotPacket[7] = fifoBuffer[9];
-        teapotPacket[8] = fifoBuffer[12];
-        teapotPacket[9] = fifoBuffer[13];
-        if (packet_pos < NUM_PACKETS) {
-          memcpy(udpPackets + packet_pos * NUM_PACKETS, teapotPacket, 14);
-          packet_pos ++;
-        } else {
-          packet_pos = 0;
-          udpSender.beginPacket(CONTROLLER, SEND_PORT);
-          udpSender.write(udpPackets, 14 * NUM_PACKETS);
-          udpSender.endPacket();
-        }
+	  teapotPacket.components.w = fifoBuffer.data.quat_w;
+	  teapotPacket.components.x = fifoBuffer.data.quat_x;
+	  teapotPacket.components.y = fifoBuffer.data.quat_y;
+	  teapotPacket.components.z = fifoBuffer.data.quat_z;
+          if (packet_pos < NUM_PACKETS) {
+            memcpy(udpPackets + packet_pos * NUM_PACKETS, teapotPacket.buff, sizeof(teapot_t));
+            packet_pos ++;
+          } else {
+            packet_pos = 0;
+            udpSender.beginPacket(CONTROLLER, SEND_PORT);
+            udpSender.write(udpPackets, 14 * NUM_PACKETS);
+            udpSender.endPacket();
+          }
 
-        teapotPacket[11]++; // packetCount, loops at 0xFF on purpose
+          teapotPacket.components.cnt++; // packetCount, loops at 0xFF on purpose
       #endif
   }
 }
