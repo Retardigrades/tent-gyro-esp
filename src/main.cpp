@@ -107,7 +107,7 @@ void netSetup() {
 //#define OUTPUT_TEAPOT
 #define OUTPUT_TEAPOT_UDP
 
-#define INTERRUPT_PIN GPC12  // use pin 2 on Arduino Uno & most boards
+#define INTERRUPT_PIN 12  // use pin 2 on Arduino Uno & most boards
 
 // MPU control/status vars
 bool dmpReady = false;  // set true if DMP init was successful
@@ -149,7 +149,7 @@ void dmpDataReady() { mpuInterrupt = true; }
 void init_gyro() {
 // join I2C bus (I2Cdev library doesn't do this automatically)
 #if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
-  Wire.begin(D1, D2);
+  Wire.begin(5, 4);
   Wire.setClock(400000);  // 400kHz I2C clock. Comment this line if having
                           // compilation difficulties
 #elif I2CDEV_IMPLEMENTATION == I2CDEV_BUILTIN_FASTWIRE
