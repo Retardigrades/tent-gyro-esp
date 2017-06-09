@@ -147,17 +147,15 @@ typedef struct {
 		uint16_t cnt;
 } udp_data_t;
 
-#define DATA_PER_PACKET 800 / sizeof(udp_data_t)
 #define SEND_RATE 1000 / 50
 
 
 typedef union {
-	udp_data_t data[DATA_PER_PACKET];
-	uint8_t buff[DATA_PER_PACKET * sizeof(udp_data_t)];
+	udp_data_t data;
+	uint8_t buff[sizeof(udp_data_t)];
 } udp_packet_t;
 
 udp_packet_t compressedPacket;
-uint16_t compressedPosition = 0;
 uint16_t compressedSend = 0;
 uint16_t compressedPacketCount = 0;
 
@@ -481,19 +479,17 @@ void loop() {
       #ifdef UDP_SEND_COMPRESSED
 	  uint32_t currentTime = millis();
 
-          compressedPacket.data[compressedPosition].time = currentTime;
-          mpu.dmpGetQuaternion(compressedPacket.data[compressedPosition].quat, fifoBuffer.buff);
-          compressedPacket.data[compressedPosition].cnt = compressedPacketCount++;
+          if (currentTime > (compressedSend + SEND_RATE)) {
+            compressedPacket.data.time = currentTime;
+            mpu.dmpGetQuaternion(compressedPacket.data.quat, fifoBuffer.buff);
+            compressedPacket.data.cnt = compressedPacketCount++;
 
-          ++compressedPosition;
-
-          if (compressedPosition == DATA_PER_PACKET || currentTime > (compressedSend + SEND_RATE)) {
             udpSender.beginPacket(UDP_SERVER, SEND_PORT);
-            udpSender.write(compressedPacket.buff, sizeof(udp_data_t) * compressedPosition);
+            udpSender.write(compressedPacket.buff, sizeof(udp_data_t));
             udpSender.endPacket();
-            compressedPosition = 0;
             compressedSend = currentTime;
           }
+
       #endif
   }
 }
