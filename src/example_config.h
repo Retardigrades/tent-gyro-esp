@@ -11,4 +11,5 @@
 
 #define SYSLOG_PORT 6656
 
+#define UDP_SERVER  "192.168.1.202"
 #define SEND_PORT   7000

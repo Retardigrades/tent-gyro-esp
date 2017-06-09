@@ -479,7 +479,7 @@ void loop() {
             packet_pos ++;
           } else {
             packet_pos = 0;
-            udpSender.beginPacket(CONTROLLER, SEND_PORT);
+            udpSender.beginPacket(UDP_SERVER, SEND_PORT);
             udpSender.write(udpPackets, 14 * NUM_PACKETS);
             udpSender.endPacket();
           }
@@ -506,7 +506,7 @@ void loop() {
           ++compressedPosition;
 
           if (compressedPosition == DATA_PER_PACKET || currentTime > (compressedSend + SEND_RATE)) {
-            udpSender.beginPacket(CONTROLLER, SEND_PORT);
+            udpSender.beginPacket(UDP_SERVER, SEND_PORT);
             udpSender.write(compressedPacket.buff, sizeof(udp_data_t) * compressedPosition);
             udpSender.endPacket();
             compressedPosition = 0;
