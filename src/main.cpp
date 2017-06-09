@@ -142,22 +142,13 @@ typedef union {
 #ifdef UDP_SEND_COMPRESSED
 
 typedef struct {
-		uint16_t time;
-		uint16_t quat_w;
-		uint16_t quat_x;
-		uint16_t quat_y;
-		uint16_t quat_z;
-		uint16_t gyro_x;
-		uint16_t gyro_y;
-		uint16_t gyro_z;
-		uint16_t acc_x;
-		uint16_t acc_y;
-		uint16_t acc_z;
+		uint32_t time;
+		int16_t quat[4];
 		uint16_t cnt;
 } udp_data_t;
 
 #define DATA_PER_PACKET 800 / sizeof(udp_data_t)
-#define SEND_RATE 1000 / 30
+#define SEND_RATE 1000 / 50
 
 
 typedef union {
@@ -488,19 +479,10 @@ void loop() {
       #endif
 
       #ifdef UDP_SEND_COMPRESSED
-	  uint16_t currentTime = millis();
+	  uint32_t currentTime = millis();
 
           compressedPacket.data[compressedPosition].time = currentTime;
-          compressedPacket.data[compressedPosition].quat_w = fifoBuffer.data.quat_w;
-          compressedPacket.data[compressedPosition].quat_x = fifoBuffer.data.quat_x;
-          compressedPacket.data[compressedPosition].quat_y = fifoBuffer.data.quat_y;
-          compressedPacket.data[compressedPosition].quat_z = fifoBuffer.data.quat_z;
-          compressedPacket.data[compressedPosition].gyro_x = fifoBuffer.data.gyro_x;
-          compressedPacket.data[compressedPosition].gyro_y = fifoBuffer.data.gyro_y;
-          compressedPacket.data[compressedPosition].gyro_z = fifoBuffer.data.gyro_z;
-          compressedPacket.data[compressedPosition].acc_x = fifoBuffer.data.acc_x;
-          compressedPacket.data[compressedPosition].acc_y = fifoBuffer.data.acc_y;
-          compressedPacket.data[compressedPosition].acc_z = fifoBuffer.data.acc_z;
+          mpu.dmpGetQuaternion(compressedPacket.data[compressedPosition].quat, fifoBuffer.buff);
           compressedPacket.data[compressedPosition].cnt = compressedPacketCount++;
 
           ++compressedPosition;
