@@ -6,15 +6,16 @@
 #include <I2Cdev.h>
 #include "MPU6050_6Axis_MotionApps20.h"
 //#include "MPU6050.h" // not necessary if using MotionApps include file
+#include "Wire.h"
 
 #include "config.h"
 #include "update.h"
+#include "log.h"
 
-// Arduino Wire library is required if I2Cdev I2CDEV_ARDUINO_WIRE implementation
-// is used in I2Cdev.h
-#if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
-#include "Wire.h"
-#endif
+#define MPU_POWER_PIN  14
+#define MPU_INT_PIN    12
+#define I2C_SDA 5
+#define I2C_SCL 4
 
 MPU6050 mpu;
 
@@ -107,11 +108,6 @@ void netSetup() {
 //#define OUTPUT_TEAPOT
 //#define OUTPUT_TEAPOT_UDP
 #define UDP_SEND_COMPRESSED
-
-#define MPU_POWER_PIN  14
-#define MPU_INT_PIN    12
-#define I2C_SDA 5
-#define I2C_SCL 4
 
 typedef union {
 	struct {
@@ -206,66 +202,36 @@ teapot_t teapotPacket = { .buff = {'$', 0x02, 0, 0,    0,    0,    0,
 uint8_t packet_pos = 0;
 uint8_t udpPackets[14 * NUM_PACKETS];
 
-
-// ================================================================
-// ===               INTERRUPT DETECTION ROUTINE                ===
-// ================================================================
-
 volatile bool mpuInterrupt =
     false;  // indicates whether MPU interrupt pin has gone high
 void dmpDataReady() { mpuInterrupt = true; }
 
 void init_gyro() {
 
-  // hard reset MPU
+  // hard reset MPU to make sure it will communicate with us
   pinMode(MPU_POWER_PIN, OUTPUT);
   digitalWrite(MPU_POWER_PIN, LOW);
-  delay(100);
+  delay(10);
   digitalWrite(MPU_POWER_PIN, HIGH);
+  delay(10);
 
 // join I2C bus (I2Cdev library doesn't do this automatically)
-#if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
   Wire.begin(I2C_SDA, I2C_SCL);
   Wire.setClock(400000);  // 400kHz I2C clock. Comment this line if having
                           // compilation difficulties
-#elif I2CDEV_IMPLEMENTATION == I2CDEV_BUILTIN_FASTWIRE
-  Fastwire::setup(400, true);
-#endif
-
-  // initialize serial communication
-  // (115200 chosen because it is required for Teapot Demo output, but it's
-  // really up to you depending on your project)
-  while (!Serial)
-    ;  // wait for Leonardo enumeration, others continue immediately
-
-  // NOTE: 8MHz or slower host processors, like the Teensy @ 3.3v or Ardunio
-  // Pro Mini running at 3.3v, cannot handle this baud rate reliably due to
-  // the baud timing being too misaligned with processor ticks. You must use
-  // 38400 or slower in these cases, or use some kind of external separate
-  // crystal solution for the UART timer.
 
   // initialize device
-  Serial.println(F("Initializing I2C devices...."));
+  LOG(LOG_INFO, "Initializing I2C devices....");
   mpu.initialize();
   pinMode(MPU_INT_PIN, INPUT);
 
   // verify connection
-  Serial.println(F("Testing device connections..."));
-  Serial.println(mpu.testConnection() ? F("MPU6050 connection successful")
-                                      : F("MPU6050 connection failed"));
+  LOG(LOG_INFO, "Testing device connections...");
+  LOG(LOG_INFO, mpu.testConnection() ? "MPU6050 connection successful"
+                                      : "MPU6050 connection failed");
 
-  // wait for ready
-    /*
-    Serial.println(F("\nSend any character to begin DMP programming and demo: "));
-    while (Serial.available() && Serial.read())
-      ;  // empty buffer
-    while (!Serial.available())
-      ;  // wait for data
-    while (Serial.available() && Serial.read())
-      ;  // empty buffer again
-    */
   // load and configure the DMP
-  Serial.println(F("Initializing DMP..."));
+  LOG(LOG_INFO, "Initializing DMP...");
   devStatus = mpu.dmpInitialize();
 
   // supply your own gyro offsets here, scaled for min sensitivity
@@ -277,18 +243,17 @@ void init_gyro() {
   // make sure it worked (returns 0 if so)
   if (devStatus == 0) {
     // turn on the DMP, now that it's ready
-    Serial.println(F("Enabling DMP..."));
+    LOG(LOG_INFO, "Enabling DMP...");
     mpu.setDMPEnabled(true);
 
     // enable Arduino interrupt detection
-    Serial.println(
-        F("Enabling interrupt detection (Arduino external interrupt 0)..."));
+    LOG(LOG_INFO, "Enabling interrupt detection (Arduino external interrupt 0)...");
     attachInterrupt(digitalPinToInterrupt(MPU_INT_PIN), dmpDataReady, RISING);
     mpuIntStatus = mpu.getIntStatus();
 
     // set our DMP Ready flag so the main loop() function knows it's okay to use
     // it
-    Serial.println(F("DMP ready! Waiting for first interrupt..."));
+    LOG(LOG_INFO, F("DMP ready! Waiting for first interrupt..."));
     dmpReady = true;
 
     // get expected DMP packet size for later comparison
@@ -298,14 +263,12 @@ void init_gyro() {
     // 1 = initial memory load failed
     // 2 = DMP configuration updates failed
     // (if it's going to break, usually the code will be 1)
-    Serial.print(F("DMP Initialization failed (code "));
-    Serial.print(devStatus);
-    Serial.println(F(")"));
+    LOGF(LOG_ERR, "DMP Initialization failed (code %d)\n", devStatus);
   }
 }
 
 void setup() {
-#ifdef DEBUG
+#ifdef SERIAL_OUTPUT
   Serial.begin(115200);
   Serial.setDebugOutput(true);
 #endif
@@ -315,29 +278,29 @@ void setup() {
 
   netSetup();
 
-  syslog.log(LOG_INFO, "Controller was (re)booted - check for updates");
+  LOG(LOG_INFO, "Controller was (re)booted - check for updates");
   UPDATE(CONTROLLER, UPDATE_PORT, UPDATE_EP);
 
   init_gyro();
   udpControl.begin(7001);
 
-  syslog.log(LOG_INFO, "Starting normal operation");
+  LOG(LOG_INFO, "Starting normal operation");
 }
 
 void check_control() {
   size_t packetSize = udpControl.parsePacket();
   if (0 != packetSize) {
     unsigned char command = udpControl.read();
-    syslog.logf(LOG_INFO, "Control command: %02x.", command);
+    LOGF(LOG_INFO, "Control command: %02x.", command);
 
     switch (command) {
       case 0x01:
-        syslog.log(LOG_CRIT, "Reboot controller");
+        LOGF(LOG_CRIT, "Reboot controller");
 	      delay(50);
 	      ESP.restart();
 	    break;
       default:
-        syslog.logf(LOG_WARNING, "unknown command %d", command);
+        LOGF(LOG_WARNING, "unknown command %d", command);
     }
   }
 }
@@ -373,7 +336,7 @@ void loop() {
   if ((mpuIntStatus & 0x10) || fifoCount == 1024) {
       // reset so we can continue cleanly
       mpu.resetFIFO();
-      Serial.println(F("FIFO overflow!"));
+      LOG(LOG_WARNING, "FIFO overflow!");
 
   // otherwise, check for DMP data ready interrupt (this should happen frequently)
   } else if (mpuIntStatus & 0x02) {
@@ -388,6 +351,9 @@ void loop() {
       fifoCount -= packetSize;
 
       #ifdef OUTPUT_READABLE_QUATERNION
+      #ifndef SERIAL_OUTPUT
+      #error define SERIAL_OUTPUT to enable serial output of values
+      #endif
           // display quaternion values in easy matrix form: w x y z
           mpu.dmpGetQuaternion(&q, fifoBuffer.buff);
           Serial.print("quat\t");
@@ -401,6 +367,9 @@ void loop() {
       #endif
 
       #ifdef OUTPUT_READABLE_EULER
+      #ifndef SERIAL_OUTPUT
+      #error define SERIAL_OUTPUT to enable serial output of values
+      #endif
           // display Euler angles in degrees
           mpu.dmpGetQuaternion(&q, fifoBuffer.buff);
           mpu.dmpGetEuler(euler, &q);
@@ -413,6 +382,9 @@ void loop() {
       #endif
 
       #ifdef OUTPUT_READABLE_YAWPITCHROLL
+      #ifndef SERIAL_OUTPUT
+      #error define SERIAL_OUTPUT to enable serial output of values
+      #endif
           // display Euler angles in degrees
           mpu.dmpGetQuaternion(&q, fifoBuffer.buff);
           mpu.dmpGetGravity(&gravity, &q);
@@ -426,6 +398,9 @@ void loop() {
       #endif
 
       #ifdef OUTPUT_READABLE_REALACCEL
+      #ifndef SERIAL_OUTPUT
+      #error define SERIAL_OUTPUT to enable serial output of values
+      #endif
           // display real acceleration, adjusted to remove gravity
           mpu.dmpGetQuaternion(&q, fifoBuffer.buff);
           mpu.dmpGetAccel(&aa, fifoBuffer.buff);
@@ -440,7 +415,10 @@ void loop() {
       #endif
 
       #ifdef OUTPUT_READABLE_WORLDACCEL
-          // display initial world-frame acceleration, adjusted to remove gravity
+      #ifndef SERIAL_OUTPUT
+      #error define SERIAL_OUTPUT to enable serial output of values
+      #endif
+        // display initial world-frame acceleration, adjusted to remove gravity
           // and rotated based on known orientation from quaternion
           mpu.dmpGetQuaternion(&q, fifoBuffer.buff);
           mpu.dmpGetAccel(&aa, fifoBuffer.buff);
