@@ -6,7 +6,7 @@
 
 #define CONTROLLER "brettchen"
 
-#define UPDATE_EP "/gryro_fw"
+#define UPDATE_EP "/gyro_fw"
 #define UPDATE_PORT 6655
 
 #define SYSLOG_PORT 6656
