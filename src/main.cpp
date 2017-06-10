@@ -108,9 +108,10 @@ void netSetup() {
 //#define OUTPUT_TEAPOT_UDP
 #define UDP_SEND_COMPRESSED
 
-
-
-#define INTERRUPT_PIN 12  // use pin 2 on Arduino Uno & most boards
+#define MPU_POWER_PIN  14
+#define MPU_INT_PIN    12
+#define I2C_SDA 5
+#define I2C_SCL 4
 
 typedef union {
 	struct {
@@ -215,9 +216,16 @@ volatile bool mpuInterrupt =
 void dmpDataReady() { mpuInterrupt = true; }
 
 void init_gyro() {
+
+  // hard reset MPU
+  pinMode(MPU_POWER_PIN, OUTPUT);
+  digitalWrite(MPU_POWER_PIN, LOW);
+  delay(100);
+  digitalWrite(MPU_POWER_PIN, HIGH);
+
 // join I2C bus (I2Cdev library doesn't do this automatically)
 #if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
-  Wire.begin(5, 4);
+  Wire.begin(I2C_SDA, I2C_SCL);
   Wire.setClock(400000);  // 400kHz I2C clock. Comment this line if having
                           // compilation difficulties
 #elif I2CDEV_IMPLEMENTATION == I2CDEV_BUILTIN_FASTWIRE
@@ -239,7 +247,7 @@ void init_gyro() {
   // initialize device
   Serial.println(F("Initializing I2C devices...."));
   mpu.initialize();
-  pinMode(INTERRUPT_PIN, INPUT);
+  pinMode(MPU_INT_PIN, INPUT);
 
   // verify connection
   Serial.println(F("Testing device connections..."));
@@ -247,15 +255,15 @@ void init_gyro() {
                                       : F("MPU6050 connection failed"));
 
   // wait for ready
-  /*
-  Serial.println(F("\nSend any character to begin DMP programming and demo: "));
-  while (Serial.available() && Serial.read())
-    ;  // empty buffer
-  while (!Serial.available())
-    ;  // wait for data
-  while (Serial.available() && Serial.read())
-    ;  // empty buffer again
-  */
+    /*
+    Serial.println(F("\nSend any character to begin DMP programming and demo: "));
+    while (Serial.available() && Serial.read())
+      ;  // empty buffer
+    while (!Serial.available())
+      ;  // wait for data
+    while (Serial.available() && Serial.read())
+      ;  // empty buffer again
+    */
   // load and configure the DMP
   Serial.println(F("Initializing DMP..."));
   devStatus = mpu.dmpInitialize();
@@ -275,7 +283,7 @@ void init_gyro() {
     // enable Arduino interrupt detection
     Serial.println(
         F("Enabling interrupt detection (Arduino external interrupt 0)..."));
-    attachInterrupt(digitalPinToInterrupt(INTERRUPT_PIN), dmpDataReady, RISING);
+    attachInterrupt(digitalPinToInterrupt(MPU_INT_PIN), dmpDataReady, RISING);
     mpuIntStatus = mpu.getIntStatus();
 
     // set our DMP Ready flag so the main loop() function knows it's okay to use
