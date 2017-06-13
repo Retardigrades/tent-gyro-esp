@@ -17,6 +17,13 @@
 #define I2C_SDA 4
 #define I2C_SCL 5
 
+/* maximum time to wait for a new interrupt */
+#define MAX_INT_WAIT_MS   2000
+
+/* maximum consecutive errors after interrupt signal */
+#define MAX_INT_ERRORS    20
+uint16_t intErrors = 0;
+
 MPU6050 mpu;
 
 WiFiUDP udpSyslogClient;
@@ -306,9 +313,13 @@ void check_control() {
 }
 
 void loop() {
-  // if programming failed, don't try to do anything
-  if (!dmpReady) return;
+  // if programming failed, try again with reboot
+  if (!dmpReady) {
+    LOG(LOG_ERR, "DMP not ready - reboot");
+    ESP.restart();
+  }
 
+  uint16_t intWaitTime = 0;
   // wait for MPU interrupt or extra packet(s) available
   while (!mpuInterrupt && fifoCount < packetSize) {
       // other program behavior stuff here
@@ -321,8 +332,16 @@ void loop() {
       // .
       // .
       // .
-      // Delay for a least one millisecond here to give the WiFi stuff time to act
-      delay(1);
+      /* something went wrong and the MPU isn't talking to us anymore */
+      if (intWaitTime >= MAX_INT_WAIT_MS) {
+        LOG(LOG_ERR, "Interrupt is dead - reboot");
+        ESP.restart();
+      } else {
+        // Delay for one millisecond here to give the WiFi stuff time to act
+        // and increase counter
+        delay(1);
+        intWaitTime++;
+      }
   }
 
   // reset interrupt flag and get INT_STATUS byte
@@ -338,8 +357,15 @@ void loop() {
       mpu.resetFIFO();
       LOG(LOG_WARNING, "FIFO overflow!");
 
+      /* reboot when this happens again too often  */
+      intErrors++;
+
   // otherwise, check for DMP data ready interrupt (this should happen frequently)
   } else if (mpuIntStatus & 0x02) {
+
+      /* reset int error counter */
+      intErrors = 0;
+
       // wait for correct available data length, should be a VERY short wait
       while (fifoCount < packetSize) fifoCount = mpu.getFIFOCount();
 
@@ -477,5 +503,16 @@ void loop() {
           }
 
       #endif
+  } else {
+    /* interrupt occured without the DMP_INT bit (Bit 1) set
+     * this is an error
+     */
+     LOG(LOG_WARNING, "interrupt error");
+     intErrors++;
+  }
+  if (intErrors >= MAX_INT_ERRORS) {
+    /* try reboot */
+    LOG(LOG_ERR, "Too many erroneous interrupts - reboot");
+    ESP.reset();
   }
 }
