@@ -14,8 +14,8 @@
 
 #define MPU_POWER_PIN  14
 #define MPU_INT_PIN    12
-#define I2C_SDA 5
-#define I2C_SCL 4
+#define I2C_SDA 4
+#define I2C_SCL 5
 
 MPU6050 mpu;
 
