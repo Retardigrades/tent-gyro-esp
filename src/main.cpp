@@ -21,7 +21,7 @@
 #define MAX_INT_WAIT_MS   2000
 
 /* maximum consecutive errors after interrupt signal */
-#define MAX_INT_ERRORS    20
+#define MAX_INT_ERRORS    500
 uint16_t intErrors = 0;
 
 MPU6050 mpu;
@@ -151,7 +151,7 @@ typedef struct {
 		uint16_t cnt;
 } udp_data_t;
 
-#define SEND_RATE 1000 / 50
+#define SEND_RATE 1000 / 60
 
 
 typedef union {
@@ -503,16 +503,21 @@ void loop() {
           }
 
       #endif
-  } else {
+  }
+  
+#if 0
+  else {
     /* interrupt occured without the DMP_INT bit (Bit 1) set
      * this is an error
      */
-     LOG(LOG_WARNING, "interrupt error");
+     //LOG(LOG_WARNING, "interrupt error");
      intErrors++;
   }
   if (intErrors >= MAX_INT_ERRORS) {
     /* try reboot */
     LOG(LOG_ERR, "Too many erroneous interrupts - reboot");
-    ESP.reset();
+    //ESP.reset();
+    intErrors = 0;
   }
+#endif
 }
