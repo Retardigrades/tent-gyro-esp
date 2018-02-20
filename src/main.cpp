@@ -151,7 +151,7 @@ typedef struct {
 		uint16_t cnt;
 } udp_data_t;
 
-#define SEND_RATE 1000 / 60
+#define SEND_RATE 1000 / 30
 
 
 typedef union {
