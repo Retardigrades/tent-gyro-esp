@@ -211,7 +211,7 @@ uint8_t udpPackets[14 * NUM_PACKETS];
 
 volatile bool mpuInterrupt =
     false;  // indicates whether MPU interrupt pin has gone high
-void dmpDataReady() { mpuInterrupt = true; }
+void ICACHE_RAM_ATTR dmpDataReady() { mpuInterrupt = true; }
 
 void init_gyro() {
 
