@@ -22,7 +22,6 @@
 
 /* maximum consecutive errors after interrupt signal */
 #define MAX_INT_ERRORS    500
-uint16_t intErrors = 0;
 
 MPU6050 mpu;
 
@@ -30,14 +29,6 @@ WiFiUDP udpSyslogClient;
 WiFiUDP udpSender;
 WiFiUDP udpControl;
 Syslog syslog(udpSyslogClient, CONTROLLER, SYSLOG_PORT, HOSTNAME, APP_NAME, LOG_KERN);
-
-struct {
-  unsigned long last_frame;
-  unsigned long last_packet_check;
-  unsigned long last_control_check;
-} ts;
-
-uint16_t frame_cnt = 0;
 
 void eventWiFi(WiFiEvent_t event) {
   switch (event) {
@@ -165,53 +156,58 @@ uint16_t compressedPacketCount = 0;
 
 #endif
 
-// MPU control/status vars
-bool dmpReady = false;  // set true if DMP init was successful
-uint8_t mpuIntStatus;   // holds actual interrupt status byte from MPU
-uint8_t devStatus;    // return status after each device operation (0 = success,
-                      // !0 = error)
 uint16_t packetSize;  // expected DMP packet size (default is 42 bytes)
-uint16_t fifoCount;   // count of all bytes currently in FIFO
-fifo_t fifoBuffer;  // FIFO storage buffer
-
-// orientation/motion vars
-Quaternion q;    // [w, x, y, z]         quaternion container
-VectorInt16 aa;  // [x, y, z]            accel sensor measurements
-VectorInt16
-    aaReal;  // [x, y, z]            gravity-free accel sensor measurements
-VectorInt16
-    aaWorld;  // [x, y, z]            world-frame accel sensor measurements
-VectorFloat gravity;  // [x, y, z]            gravity vector
-float euler[3];       // [psi, theta, phi]    Euler angle container
-float
-    ypr[3];  // [yaw, pitch, roll]   yaw/pitch/roll container and gravity vector
+bool dmpReady = false;
 
 
+typedef struct {
+  fifo_t fifo;
+  unsigned long timestamp;
+} fifo_entry_t;
 
-// packet structure for InvenSense teapot demo
-typedef union {
-	struct {
-		char preamble[2];
-		uint16_t w;
-		uint16_t x;
-		uint16_t y;
-		uint16_t z;
-		uint8_t _;
-		uint8_t cnt;
-	} components;
-	uint8_t buff[14];
-} teapot_t;
+#define FIFO_RING_LEN 25
 
-teapot_t teapotPacket = { .buff = {'$', 0x02, 0, 0,    0,    0,    0,
-                            0,   0,    0, 0x00, 0x00, '\r', '\n'} };
+volatile uint8_t fifo_pos = 0;
+fifo_entry_t fifo_ring[FIFO_RING_LEN];
+volatile uint16_t intErrors= 0;
 
-#define NUM_PACKETS 10
-uint8_t packet_pos = 0;
-uint8_t udpPackets[14 * NUM_PACKETS];
 
-volatile bool mpuInterrupt =
-    false;  // indicates whether MPU interrupt pin has gone high
-void dmpDataReady() { mpuInterrupt = true; }
+void ICACHE_RAM_ATTR readDataISR() {
+  uint8_t mpuIntStatus = mpu.getIntStatus();
+  uint16_t fifoCount = mpu.getFIFOCount();
+
+  if ((mpuIntStatus & 0x10) || fifoCount == 1024) {
+      // reset so we can continue cleanly
+      mpu.resetFIFO();
+      LOG(LOG_WARNING, "FIFO overflow!");
+
+      /* reboot when this happens again too often  */
+      intErrors++;
+
+  // otherwise, check for DMP data ready interrupt (this should happen frequently)
+  } else if (mpuIntStatus & 0x02) {
+    // get current FIFO count
+    do {
+      volatile uint8_t nex_pos = (fifo_pos + 1) % FIFO_RING_LEN;
+
+      /* reset int error counter */
+      intErrors = 0;
+
+      // wait for correct available data length, should be a VERY short wait
+      while (fifoCount < packetSize) fifoCount = mpu.getFIFOCount();
+
+      // read a packet from FIFO
+      mpu.getFIFOBytes(fifo_ring[nex_pos].fifo.buff, packetSize);
+      fifo_ring[nex_pos].timestamp = millis();
+      nex_pos = nex_pos;
+
+      // track FIFO count here in case there is > 1 packet available
+      // (this lets us immediately read more without waiting for an interrupt)
+      fifoCount -= packetSize;
+    } while (fifoCount != 0);
+  }
+}
+
 
 void init_gyro() {
 
@@ -237,6 +233,10 @@ void init_gyro() {
   LOG(LOG_INFO, mpu.testConnection() ? "MPU6050 connection successful"
                                       : "MPU6050 connection failed");
 
+  // MPU control/status vars
+  uint8_t devStatus;    // return status after each device operation (0 = success,
+                        // !0 = error)
+
   // load and configure the DMP
   LOG(LOG_INFO, "Initializing DMP...");
   devStatus = mpu.dmpInitialize();
@@ -255,8 +255,7 @@ void init_gyro() {
 
     // enable Arduino interrupt detection
     LOG(LOG_INFO, "Enabling interrupt detection (Arduino external interrupt 0)...");
-    attachInterrupt(digitalPinToInterrupt(MPU_INT_PIN), dmpDataReady, RISING);
-    mpuIntStatus = mpu.getIntStatus();
+    attachInterrupt(digitalPinToInterrupt(MPU_INT_PIN), readDataISR, RISING);
 
     // set our DMP Ready flag so the main loop() function knows it's okay to use
     // it
@@ -316,208 +315,37 @@ void loop() {
   // if programming failed, try again with reboot
   if (!dmpReady) {
     LOG(LOG_ERR, "DMP not ready - reboot");
+    WiFi.disconnect();
     ESP.restart();
   }
 
-  uint16_t intWaitTime = 0;
-  // wait for MPU interrupt or extra packet(s) available
-  while (!mpuInterrupt && fifoCount < packetSize) {
-      // other program behavior stuff here
-      // .
-      // .
-      // .
-      // if you are really paranoid you can frequently test in between other
-      // stuff to see if mpuInterrupt is true, and if so, "break;" from the
-      // while() loop to immediately process the MPU data
-      // .
-      // .
-      // .
-      /* something went wrong and the MPU isn't talking to us anymore */
-      if (intWaitTime >= MAX_INT_WAIT_MS) {
-        LOG(LOG_ERR, "Interrupt is dead - reboot");
-        ESP.restart();
-      } else {
-        // Delay for one millisecond here to give the WiFi stuff time to act
-        // and increase counter
-        delay(1);
-        intWaitTime++;
-      }
+  uint32_t currentTime = millis();
+
+  if (currentTime > (compressedSend + SEND_RATE)) {
+    fifo_entry_t entry;
+    memcpy(&entry, &(fifo_ring[fifo_pos]), sizeof(fifo_entry_t));
+
+    if ((entry.timestamp + MAX_INT_WAIT_MS) > currentTime) {
+      LOG(LOG_ERR, "Interrupt is dead - reboot");
+      WiFi.disconnect();
+      ESP.restart();
+    }
+
+    if (intErrors > MAX_INT_ERRORS) {
+      LOG(LOG_ERR, "Too many erroneous interrupts - reboot");
+      delay(10);
+      WiFi.disconnect();
+      ESP.restart();
+
+    }
+
+    compressedPacket.data.time = entry.timestamp;
+    mpu.dmpGetQuaternion(compressedPacket.data.quat, entry.fifo.buff);
+    compressedPacket.data.cnt = compressedPacketCount++;
+
+    udpSender.beginPacket(UDP_SERVER, SEND_PORT);
+    udpSender.write(compressedPacket.buff, sizeof(udp_data_t));
+    udpSender.endPacket();
+    compressedSend = currentTime;
   }
-
-  // reset interrupt flag and get INT_STATUS byte
-  mpuInterrupt = false;
-  mpuIntStatus = mpu.getIntStatus();
-
-  // get current FIFO count
-  fifoCount = mpu.getFIFOCount();
-
-  // check for overflow (this should never happen unless our code is too inefficient)
-  if ((mpuIntStatus & 0x10) || fifoCount == 1024) {
-      // reset so we can continue cleanly
-      mpu.resetFIFO();
-      LOG(LOG_WARNING, "FIFO overflow!");
-
-      /* reboot when this happens again too often  */
-      intErrors++;
-
-  // otherwise, check for DMP data ready interrupt (this should happen frequently)
-  } else if (mpuIntStatus & 0x02) {
-
-      /* reset int error counter */
-      intErrors = 0;
-
-      // wait for correct available data length, should be a VERY short wait
-      while (fifoCount < packetSize) fifoCount = mpu.getFIFOCount();
-
-      // read a packet from FIFO
-      mpu.getFIFOBytes(fifoBuffer.buff, packetSize);
-
-      // track FIFO count here in case there is > 1 packet available
-      // (this lets us immediately read more without waiting for an interrupt)
-      fifoCount -= packetSize;
-
-      #ifdef OUTPUT_READABLE_QUATERNION
-      #ifndef SERIAL_OUTPUT
-      #error define SERIAL_OUTPUT to enable serial output of values
-      #endif
-          // display quaternion values in easy matrix form: w x y z
-          mpu.dmpGetQuaternion(&q, fifoBuffer.buff);
-          Serial.print("quat\t");
-          Serial.print(q.w);
-          Serial.print("\t");
-          Serial.print(q.x);
-          Serial.print("\t");
-          Serial.print(q.y);
-          Serial.print("\t");
-          Serial.println(q.z);
-      #endif
-
-      #ifdef OUTPUT_READABLE_EULER
-      #ifndef SERIAL_OUTPUT
-      #error define SERIAL_OUTPUT to enable serial output of values
-      #endif
-          // display Euler angles in degrees
-          mpu.dmpGetQuaternion(&q, fifoBuffer.buff);
-          mpu.dmpGetEuler(euler, &q);
-          Serial.print("euler\t");
-          Serial.print(euler[0] * 180/M_PI);
-          Serial.print("\t");
-          Serial.print(euler[1] * 180/M_PI);
-          Serial.print("\t");
-          Serial.println(euler[2] * 180/M_PI);
-      #endif
-
-      #ifdef OUTPUT_READABLE_YAWPITCHROLL
-      #ifndef SERIAL_OUTPUT
-      #error define SERIAL_OUTPUT to enable serial output of values
-      #endif
-          // display Euler angles in degrees
-          mpu.dmpGetQuaternion(&q, fifoBuffer.buff);
-          mpu.dmpGetGravity(&gravity, &q);
-          mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
-          Serial.print("ypr\t");
-          Serial.print(ypr[0] * 180/M_PI);
-          Serial.print("\t");
-          Serial.print(ypr[1] * 180/M_PI);
-          Serial.print("\t");
-          Serial.println(ypr[2] * 180/M_PI);
-      #endif
-
-      #ifdef OUTPUT_READABLE_REALACCEL
-      #ifndef SERIAL_OUTPUT
-      #error define SERIAL_OUTPUT to enable serial output of values
-      #endif
-          // display real acceleration, adjusted to remove gravity
-          mpu.dmpGetQuaternion(&q, fifoBuffer.buff);
-          mpu.dmpGetAccel(&aa, fifoBuffer.buff);
-          mpu.dmpGetGravity(&gravity, &q);
-          mpu.dmpGetLinearAccel(&aaReal, &aa, &gravity);
-          Serial.print("areal\t");
-          Serial.print(aaReal.x);
-          Serial.print("\t");
-          Serial.print(aaReal.y);
-          Serial.print("\t");
-          Serial.println(aaReal.z);
-      #endif
-
-      #ifdef OUTPUT_READABLE_WORLDACCEL
-      #ifndef SERIAL_OUTPUT
-      #error define SERIAL_OUTPUT to enable serial output of values
-      #endif
-        // display initial world-frame acceleration, adjusted to remove gravity
-          // and rotated based on known orientation from quaternion
-          mpu.dmpGetQuaternion(&q, fifoBuffer.buff);
-          mpu.dmpGetAccel(&aa, fifoBuffer.buff);
-          mpu.dmpGetGravity(&gravity, &q);
-          mpu.dmpGetLinearAccel(&aaReal, &aa, &gravity);
-          mpu.dmpGetLinearAccelInWorld(&aaWorld, &aaReal, &q);
-          Serial.print("aworld\t");
-          Serial.print(aaWorld.x);
-          Serial.print("\t");
-          Serial.print(aaWorld.y);
-          Serial.print("\t");
-          Serial.println(aaWorld.z);
-      #endif
-
-      #ifdef OUTPUT_TEAPOT
-          // display quaternion values in InvenSense Teapot demo format:
-	  teapotPacket.components.w = fifoBuffer.data.quat_w;
-	  teapotPacket.components.x = fifoBuffer.data.quat_x;
-	  teapotPacket.components.y = fifoBuffer.data.quat_y;
-	  teapotPacket.components.z = fifoBuffer.data.quat_z;
-          Serial.write(teapotPacket.buff, 14);
-          teapotPacket.components.cnt++; // packetCount, loops at 0xFF on purpose
-      #endif
-
-      #ifdef OUTPUT_TEAPOT_UDP
-      // display quaternion values in InvenSense Teapot demo format:
-	  teapotPacket.components.w = fifoBuffer.data.quat_w;
-	  teapotPacket.components.x = fifoBuffer.data.quat_x;
-	  teapotPacket.components.y = fifoBuffer.data.quat_y;
-	  teapotPacket.components.z = fifoBuffer.data.quat_z;
-          if (packet_pos < NUM_PACKETS) {
-            memcpy(udpPackets + packet_pos * NUM_PACKETS, teapotPacket.buff, sizeof(teapot_t));
-            packet_pos ++;
-          } else {
-            packet_pos = 0;
-            udpSender.beginPacket(UDP_SERVER, SEND_PORT);
-            udpSender.write(udpPackets, 14 * NUM_PACKETS);
-            udpSender.endPacket();
-          }
-
-          teapotPacket.components.cnt++; // packetCount, loops at 0xFF on purpose
-      #endif
-
-      #ifdef UDP_SEND_COMPRESSED
-	  uint32_t currentTime = millis();
-
-          if (currentTime > (compressedSend + SEND_RATE)) {
-            compressedPacket.data.time = currentTime;
-            mpu.dmpGetQuaternion(compressedPacket.data.quat, fifoBuffer.buff);
-            compressedPacket.data.cnt = compressedPacketCount++;
-
-            udpSender.beginPacket(UDP_SERVER, SEND_PORT);
-            udpSender.write(compressedPacket.buff, sizeof(udp_data_t));
-            udpSender.endPacket();
-            compressedSend = currentTime;
-          }
-
-      #endif
-  }
-  
-#if 0
-  else {
-    /* interrupt occured without the DMP_INT bit (Bit 1) set
-     * this is an error
-     */
-     //LOG(LOG_WARNING, "interrupt error");
-     intErrors++;
-  }
-  if (intErrors >= MAX_INT_ERRORS) {
-    /* try reboot */
-    LOG(LOG_ERR, "Too many erroneous interrupts - reboot");
-    //ESP.reset();
-    intErrors = 0;
-  }
-#endif
 }
